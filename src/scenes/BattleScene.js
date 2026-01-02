@@ -84,36 +84,94 @@ class BattleScene extends Phaser.Scene {
         const numWalls = 2 + Math.floor(Math.random() * 3);  // 2-4 walls
         const numTraps = 2 + Math.floor(Math.random() * 3);  // 2-4 traps
 
-        // Get valid positions for obstacles (not player start, not too close)
-        const validPositions = this.hexGrid.hexes.filter(hex => {
-            // Not player position
-            if (hex.q === 0 && hex.r === 0) return false;
+        this.obstacles = [];
 
-            // Not adjacent to player (keep some space)
-            const dist = this.hexGrid.getDistance(hex.q, hex.r, 0, 0);
+        // Helper: Check if hex is on the edge (has fewer than 6 valid neighbors)
+        const isEdgeHex = (q, r) => {
+            const neighbors = this.hexGrid.getNeighbors(q, r);
+            return neighbors.length < 6;
+        };
+
+        // Helper: Count adjacent walls
+        const countAdjacentWalls = (q, r) => {
+            const neighbors = this.hexGrid.getNeighbors(q, r);
+            return neighbors.filter(n =>
+                this.obstacles.some(o => o.type === 'wall' && o.q === n.q && o.r === n.r)
+            ).length;
+        };
+
+        // Helper: Check if position is valid for a wall
+        const isValidWallPosition = (q, r) => {
+            // Not player position or too close
+            if (q === 0 && r === 0) return false;
+            const dist = this.hexGrid.getDistance(q, r, 0, 0);
             if (dist < 2) return false;
 
+            // Not on edge
+            if (isEdgeHex(q, r)) return false;
+
+            // Not already occupied
+            if (this.obstacles.some(o => o.q === q && o.r === r)) return false;
+
+            // Must not have 2+ adjacent walls
+            if (countAdjacentWalls(q, r) >= 2) return false;
+
+            return true;
+        };
+
+        // Get all valid wall positions (not edge, not near player)
+        let validWallPositions = this.hexGrid.hexes.filter(hex =>
+            isValidWallPosition(hex.q, hex.r)
+        );
+
+        // Place walls with adjacency preference
+        for (let i = 0; i < numWalls && validWallPositions.length > 0; i++) {
+            // Separate positions by adjacency
+            const adjacentToWall = validWallPositions.filter(h => countAdjacentWalls(h.q, h.r) === 1);
+            const notAdjacentToWall = validWallPositions.filter(h => countAdjacentWalls(h.q, h.r) === 0);
+
+            let chosen;
+            if (i === 0 || adjacentToWall.length === 0) {
+                // First wall or no adjacent options: pick random from non-adjacent
+                const pool = notAdjacentToWall.length > 0 ? notAdjacentToWall : validWallPositions;
+                chosen = pool[Math.floor(Math.random() * pool.length)];
+            } else {
+                // Prefer adjacent positions (70% chance if available)
+                if (Math.random() < 0.7 && adjacentToWall.length > 0) {
+                    chosen = adjacentToWall[Math.floor(Math.random() * adjacentToWall.length)];
+                } else if (notAdjacentToWall.length > 0) {
+                    chosen = notAdjacentToWall[Math.floor(Math.random() * notAdjacentToWall.length)];
+                } else {
+                    chosen = adjacentToWall[Math.floor(Math.random() * adjacentToWall.length)];
+                }
+            }
+
+            this.obstacles.push({ q: chosen.q, r: chosen.r, type: 'wall' });
+
+            // Recalculate valid positions (adjacency counts changed)
+            validWallPositions = this.hexGrid.hexes.filter(hex =>
+                isValidWallPosition(hex.q, hex.r)
+            );
+        }
+
+        // Get valid positions for traps (not player, not too close, not occupied)
+        let validTrapPositions = this.hexGrid.hexes.filter(hex => {
+            if (hex.q === 0 && hex.r === 0) return false;
+            const dist = this.hexGrid.getDistance(hex.q, hex.r, 0, 0);
+            if (dist < 2) return false;
+            if (this.obstacles.some(o => o.q === hex.q && o.r === hex.r)) return false;
             return true;
         });
 
-        // Shuffle valid positions
-        for (let i = validPositions.length - 1; i > 0; i--) {
+        // Shuffle trap positions
+        for (let i = validTrapPositions.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
-            [validPositions[i], validPositions[j]] = [validPositions[j], validPositions[i]];
-        }
-
-        // Place walls first
-        this.obstacles = [];
-        let posIndex = 0;
-
-        for (let i = 0; i < numWalls && posIndex < validPositions.length; i++) {
-            const pos = validPositions[posIndex++];
-            this.obstacles.push({ q: pos.q, r: pos.r, type: 'wall' });
+            [validTrapPositions[i], validTrapPositions[j]] = [validTrapPositions[j], validTrapPositions[i]];
         }
 
         // Place traps
-        for (let i = 0; i < numTraps && posIndex < validPositions.length; i++) {
-            const pos = validPositions[posIndex++];
+        for (let i = 0; i < numTraps && i < validTrapPositions.length; i++) {
+            const pos = validTrapPositions[i];
             this.obstacles.push({ q: pos.q, r: pos.r, type: 'trap' });
         }
     }
@@ -409,7 +467,7 @@ class BattleScene extends Phaser.Scene {
         this.updateAPDisplay();
 
         // Instructions
-        this.instructionText = this.add.text(20, height - 40, 'Click hex to move (1 AP) | Click adjacent enemy to attack (1 AP) | SPACE = reset AP (debug)', {
+        this.instructionText = this.add.text(20, height - 40, 'Click to move/attack | TAB = end turn | R = restart | SPACE = reset AP (debug)', {
             fontSize: '13px',
             fontFamily: 'Courier New',
             color: '#aaaaaa'
@@ -422,6 +480,20 @@ class BattleScene extends Phaser.Scene {
                 this.actionPoints = this.maxActionPoints;
                 this.updateAPDisplay();
             }
+        });
+
+        // Tab key to end player turn
+        this.input.keyboard.on('keydown-TAB', (event) => {
+            event.preventDefault(); // Prevent browser tab switching
+            if (this.currentPhase === 'player' && !this.isMoving && !this.battleOver) {
+                this.endPlayerTurn();
+            }
+        });
+
+        // R key to restart game (debug)
+        // TODO: Remove this for final game
+        this.input.keyboard.on('keydown-R', () => {
+            this.scene.restart();
         });
 
         // Create End Turn button
