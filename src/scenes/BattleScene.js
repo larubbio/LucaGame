@@ -133,21 +133,39 @@ class BattleScene extends Phaser.Scene {
             const isInPath = this.currentPath?.some(p => p.q === hex.q && p.r === hex.r);
             const pathIndex = this.currentPath?.findIndex(p => p.q === hex.q && p.r === hex.r);
 
+            // Check if we have enough AP for this path
+            const canAffordPath = this.currentPath ? this.actionPoints >= this.currentPath.length : false;
+
             // Highlight path hexes
             if (isInPath && !obstacle) {
-                // Destination hex (last in path) gets brighter highlight
-                if (pathIndex === this.currentPath.length - 1) {
-                    fillColor = 0x4a8a6a; // Green tint for destination
-                    fillAlpha = 0.9;
+                if (canAffordPath) {
+                    // Valid path - green/blue colors
+                    if (pathIndex === this.currentPath.length - 1) {
+                        fillColor = 0x4a8a6a; // Green tint for destination
+                        fillAlpha = 0.9;
+                    } else {
+                        fillColor = 0x3a5a7a; // Subtle blue for path
+                        fillAlpha = 0.7;
+                    }
                 } else {
-                    fillColor = 0x3a5a7a; // Subtle blue for path
-                    fillAlpha = 0.7;
+                    // Can't afford - red colors
+                    if (pathIndex === this.currentPath.length - 1) {
+                        fillColor = 0x8a4a4a; // Red tint for destination
+                        fillAlpha = 0.9;
+                    } else {
+                        fillColor = 0x6a3a3a; // Darker red for path
+                        fillAlpha = 0.7;
+                    }
                 }
             }
 
             // Highlight hovered hex (destination) - even brighter
             if (this.hoveredHex && this.hoveredHex.q === hex.q && this.hoveredHex.r === hex.r && !obstacle) {
-                fillColor = 0x5a9a7a;
+                if (canAffordPath) {
+                    fillColor = 0x5a9a7a; // Green for valid
+                } else {
+                    fillColor = 0x9a5a5a; // Red for invalid
+                }
                 fillAlpha = 0.9;
             }
 
