@@ -4,14 +4,19 @@
 class BattleScene extends Phaser.Scene {
     constructor() {
         super({ key: 'BattleScene' });
+    }
 
+    /**
+     * Called on every start/restart - resets all game state
+     */
+    init() {
         this.hexGrid = null;
         this.playerRobot = null;
         this.hexGraphics = null;
         this.hoveredHex = null;
         this.selectedHex = null;
-        this.currentPath = null; // Path from player to hovered hex
-        this.isMoving = false; // Prevent input during movement
+        this.currentPath = null;
+        this.isMoving = false;
 
         // Player robot position (axial coordinates)
         this.playerPos = { q: 0, r: 0 };
@@ -19,6 +24,25 @@ class BattleScene extends Phaser.Scene {
         // Action points
         this.actionPoints = 3;
         this.maxActionPoints = 3;
+
+        // Player health
+        this.playerHP = 20;
+        this.playerMaxHP = 20;
+
+        // Player attack
+        this.playerDamage = 2;
+        this.playerAttackCost = 1;
+
+        // Enemies
+        this.enemies = [];
+
+        // Obstacles
+        this.obstacles = [];
+
+        // Turn management
+        this.currentPhase = 'player';
+        this.isProcessingTurn = false;
+        this.battleOver = false;
     }
 
     create() {
@@ -45,16 +69,151 @@ class BattleScene extends Phaser.Scene {
         this.input.on('pointermove', this.onPointerMove, this);
         this.input.on('pointerdown', this.onPointerDown, this);
 
-        // Add some example obstacles
-        this.obstacles = [
-            { q: 2, r: -1, type: 'wall' },
-            { q: -2, r: 2, type: 'wall' },
-            { q: 1, r: 2, type: 'trap' },
-            { q: -1, r: -2, type: 'trap' }
-        ];
+        // Generate random obstacles
+        this.generateObstacles();
 
-        // Redraw with obstacles
+        // Spawn enemies
+        this.spawnEnemies(3);
+
+        // Redraw with obstacles and enemies
         this.drawHexGrid();
+    }
+
+    generateObstacles() {
+        // Random number of walls (2-4) and traps (2-4)
+        const numWalls = 2 + Math.floor(Math.random() * 3);  // 2-4 walls
+        const numTraps = 2 + Math.floor(Math.random() * 3);  // 2-4 traps
+
+        this.obstacles = [];
+
+        // Helper: Check if hex is on the edge (has fewer than 6 valid neighbors)
+        const isEdgeHex = (q, r) => {
+            const neighbors = this.hexGrid.getNeighbors(q, r);
+            return neighbors.length < 6;
+        };
+
+        // Helper: Count adjacent walls
+        const countAdjacentWalls = (q, r) => {
+            const neighbors = this.hexGrid.getNeighbors(q, r);
+            return neighbors.filter(n =>
+                this.obstacles.some(o => o.type === 'wall' && o.q === n.q && o.r === n.r)
+            ).length;
+        };
+
+        // Helper: Check if position is valid for a wall
+        const isValidWallPosition = (q, r) => {
+            // Not player position or too close
+            if (q === 0 && r === 0) return false;
+            const dist = this.hexGrid.getDistance(q, r, 0, 0);
+            if (dist < 2) return false;
+
+            // Not on edge
+            if (isEdgeHex(q, r)) return false;
+
+            // Not already occupied
+            if (this.obstacles.some(o => o.q === q && o.r === r)) return false;
+
+            // Must not have 2+ adjacent walls
+            if (countAdjacentWalls(q, r) >= 2) return false;
+
+            return true;
+        };
+
+        // Get all valid wall positions (not edge, not near player)
+        let validWallPositions = this.hexGrid.hexes.filter(hex =>
+            isValidWallPosition(hex.q, hex.r)
+        );
+
+        // Place walls with adjacency preference
+        for (let i = 0; i < numWalls && validWallPositions.length > 0; i++) {
+            // Separate positions by adjacency
+            const adjacentToWall = validWallPositions.filter(h => countAdjacentWalls(h.q, h.r) === 1);
+            const notAdjacentToWall = validWallPositions.filter(h => countAdjacentWalls(h.q, h.r) === 0);
+
+            let chosen;
+            if (i === 0 || adjacentToWall.length === 0) {
+                // First wall or no adjacent options: pick random from non-adjacent
+                const pool = notAdjacentToWall.length > 0 ? notAdjacentToWall : validWallPositions;
+                chosen = pool[Math.floor(Math.random() * pool.length)];
+            } else {
+                // Prefer adjacent positions (70% chance if available)
+                if (Math.random() < 0.7 && adjacentToWall.length > 0) {
+                    chosen = adjacentToWall[Math.floor(Math.random() * adjacentToWall.length)];
+                } else if (notAdjacentToWall.length > 0) {
+                    chosen = notAdjacentToWall[Math.floor(Math.random() * notAdjacentToWall.length)];
+                } else {
+                    chosen = adjacentToWall[Math.floor(Math.random() * adjacentToWall.length)];
+                }
+            }
+
+            this.obstacles.push({ q: chosen.q, r: chosen.r, type: 'wall' });
+
+            // Recalculate valid positions (adjacency counts changed)
+            validWallPositions = this.hexGrid.hexes.filter(hex =>
+                isValidWallPosition(hex.q, hex.r)
+            );
+        }
+
+        // Get valid positions for traps (not player, not too close, not occupied)
+        let validTrapPositions = this.hexGrid.hexes.filter(hex => {
+            if (hex.q === 0 && hex.r === 0) return false;
+            const dist = this.hexGrid.getDistance(hex.q, hex.r, 0, 0);
+            if (dist < 2) return false;
+            if (this.obstacles.some(o => o.q === hex.q && o.r === hex.r)) return false;
+            return true;
+        });
+
+        // Shuffle trap positions
+        for (let i = validTrapPositions.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [validTrapPositions[i], validTrapPositions[j]] = [validTrapPositions[j], validTrapPositions[i]];
+        }
+
+        // Place traps
+        for (let i = 0; i < numTraps && i < validTrapPositions.length; i++) {
+            const pos = validTrapPositions[i];
+            this.obstacles.push({ q: pos.q, r: pos.r, type: 'trap' });
+        }
+    }
+
+    spawnEnemies(count) {
+        // Generate enemy types (at least 1 melee, 1 ranged)
+        const enemyTypes = generateEnemySpawnList(count, {
+            minMelee: 1,
+            minRanged: 1
+        });
+
+        // Get valid spawn positions (not player, not obstacles, not too close)
+        const validSpawns = this.hexGrid.hexes.filter(hex => {
+            // Not player position
+            if (hex.q === 0 && hex.r === 0) return false;
+
+            // Not too close to player (at least 2 hexes away)
+            const dist = this.hexGrid.getDistance(hex.q, hex.r, 0, 0);
+            if (dist < 2) return false;
+
+            // Not on obstacle
+            const isObstacle = this.obstacles?.some(o =>
+                o.q === hex.q && o.r === hex.r
+            );
+            if (isObstacle) return false;
+
+            return true;
+        });
+
+        // Shuffle spawn positions
+        for (let i = validSpawns.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [validSpawns[i], validSpawns[j]] = [validSpawns[j], validSpawns[i]];
+        }
+
+        // Spawn enemies
+        this.enemies = [];
+        for (let i = 0; i < count && i < validSpawns.length; i++) {
+            const spawnHex = validSpawns[i];
+            const enemy = new Enemy(this, enemyTypes[i], spawnHex.q, spawnHex.r);
+            this.enemies.push(enemy);
+        }
     }
 
     createPlayerRobot() {
@@ -159,14 +318,46 @@ class BattleScene extends Phaser.Scene {
                 }
             }
 
+            // Check if there's an enemy on this hex
+            const enemyOnHex = this.enemies?.find(e =>
+                e.isAlive && e.pos.q === hex.q && e.pos.r === hex.r
+            );
+
+            if (enemyOnHex) {
+                // Check if adjacent (attackable)
+                const distToPlayer = this.hexGrid.getDistance(
+                    hex.q, hex.r,
+                    this.playerPos.q, this.playerPos.r
+                );
+                const canAttack = distToPlayer === 1 && this.actionPoints >= this.playerAttackCost;
+
+                if (canAttack) {
+                    fillColor = 0x8a4a4a; // Red highlight for attackable
+                    fillAlpha = 0.9;
+                } else {
+                    fillColor = 0x5a3a3a; // Dim red for enemy hex
+                    fillAlpha = 0.7;
+                }
+            }
+
             // Highlight hovered hex (destination) - even brighter
             if (this.hoveredHex && this.hoveredHex.q === hex.q && this.hoveredHex.r === hex.r && !obstacle) {
-                if (canAffordPath) {
+                if (enemyOnHex) {
+                    // Hovering over an enemy
+                    const distToPlayer = this.hexGrid.getDistance(
+                        hex.q, hex.r,
+                        this.playerPos.q, this.playerPos.r
+                    );
+                    const canAttack = distToPlayer === 1 && this.actionPoints >= this.playerAttackCost;
+                    fillColor = canAttack ? 0xaa5555 : 0x6a3a3a; // Bright red if attackable
+                    fillAlpha = 0.95;
+                } else if (canAffordPath) {
                     fillColor = 0x5a9a7a; // Green for valid
+                    fillAlpha = 0.9;
                 } else {
                     fillColor = 0x9a5a5a; // Red for invalid
+                    fillAlpha = 0.9;
                 }
-                fillAlpha = 0.9;
             }
 
             // Draw filled hex
@@ -226,23 +417,6 @@ class BattleScene extends Phaser.Scene {
     createUI() {
         const { width, height } = this.cameras.main;
 
-        // Action Points display
-        this.apText = this.add.text(20, 20, '', {
-            fontSize: '20px',
-            fontFamily: 'Courier New',
-            color: '#ffcc00',
-            stroke: '#000000',
-            strokeThickness: 3
-        });
-        this.updateAPDisplay();
-
-        // Instructions
-        this.add.text(20, height - 40, 'Hover to show path | Click to move (1 AP per hex) | SPACE to reset AP', {
-            fontSize: '14px',
-            fontFamily: 'Courier New',
-            color: '#aaaaaa'
-        });
-
         // Title
         this.add.text(width / 2, 25, 'COG & SALVAGE', {
             fontSize: '28px',
@@ -252,10 +426,416 @@ class BattleScene extends Phaser.Scene {
             strokeThickness: 4
         }).setOrigin(0.5);
 
-        // Reset AP on spacebar
+        // Player HP Bar (top left)
+        this.add.text(20, 20, 'HP', {
+            fontSize: '16px',
+            fontFamily: 'Courier New',
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 2
+        });
+
+        // HP bar background
+        this.hpBarBg = this.add.graphics();
+        this.hpBarBg.fillStyle(0x333333, 1);
+        this.hpBarBg.fillRect(50, 18, 150, 20);
+        this.hpBarBg.lineStyle(2, 0x666666, 1);
+        this.hpBarBg.strokeRect(50, 18, 150, 20);
+
+        // HP bar fill
+        this.hpBarFill = this.add.graphics();
+        this.updateHPBar();
+
+        // HP text
+        this.hpText = this.add.text(125, 28, '', {
+            fontSize: '14px',
+            fontFamily: 'Courier New',
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 2
+        }).setOrigin(0.5);
+        this.updateHPText();
+
+        // Action Points display
+        this.apText = this.add.text(20, 50, '', {
+            fontSize: '20px',
+            fontFamily: 'Courier New',
+            color: '#ffcc00',
+            stroke: '#000000',
+            strokeThickness: 3
+        });
+        this.updateAPDisplay();
+
+        // Instructions
+        this.instructionText = this.add.text(20, height - 40, 'Click to move/attack | TAB = end turn | R = restart | SPACE = reset AP (debug)', {
+            fontSize: '13px',
+            fontFamily: 'Courier New',
+            color: '#aaaaaa'
+        });
+
+        // Reset AP on spacebar (for testing - easily removable)
+        // TODO: Remove this for final game
         this.input.keyboard.on('keydown-SPACE', () => {
-            this.actionPoints = this.maxActionPoints;
-            this.updateAPDisplay();
+            if (this.currentPhase === 'player' && !this.isMoving && !this.battleOver) {
+                this.actionPoints = this.maxActionPoints;
+                this.updateAPDisplay();
+            }
+        });
+
+        // Tab key to end player turn
+        this.input.keyboard.on('keydown-TAB', (event) => {
+            event.preventDefault(); // Prevent browser tab switching
+            if (this.currentPhase === 'player' && !this.isMoving && !this.battleOver) {
+                this.endPlayerTurn();
+            }
+        });
+
+        // R key to restart game (debug)
+        // TODO: Remove this for final game
+        this.input.keyboard.on('keydown-R', () => {
+            this.scene.restart();
+        });
+
+        // Create End Turn button
+        this.createEndTurnButton();
+
+        // Show initial player phase banner after a short delay
+        this.time.delayedCall(500, () => {
+            this.showPhaseBanner('PLAYER PHASE', '#44aaff');
+        });
+    }
+
+    updateHPBar() {
+        this.hpBarFill.clear();
+        const hpPercent = this.playerHP / this.playerMaxHP;
+        const barWidth = 146 * hpPercent;
+
+        // Color based on health
+        let color = 0x44aa44; // Green
+        if (hpPercent <= 0.25) {
+            color = 0xaa4444; // Red
+        } else if (hpPercent <= 0.5) {
+            color = 0xaaaa44; // Yellow
+        }
+
+        this.hpBarFill.fillStyle(color, 1);
+        this.hpBarFill.fillRect(52, 20, barWidth, 16);
+    }
+
+    updateHPText() {
+        this.hpText.setText(`${this.playerHP}/${this.playerMaxHP}`);
+    }
+
+    damagePlayer(amount) {
+        this.playerHP = Math.max(0, this.playerHP - amount);
+        this.updateHPBar();
+        this.updateHPText();
+
+        // Camera shake for feedback
+        this.cameras.main.shake(100, 0.01);
+
+        // Check for player death
+        if (this.playerHP <= 0) {
+            this.endBattle(false);
+        }
+    }
+
+    // ==================== TURN MANAGEMENT ====================
+
+    createEndTurnButton() {
+        const { width, height } = this.cameras.main;
+
+        // End Turn button background
+        this.endTurnButton = this.add.graphics();
+        this.endTurnButtonBg = { x: width - 130, y: height - 60, width: 110, height: 40 };
+        this.drawEndTurnButton(false);
+
+        // End Turn button text
+        this.endTurnText = this.add.text(
+            this.endTurnButtonBg.x + this.endTurnButtonBg.width / 2,
+            this.endTurnButtonBg.y + this.endTurnButtonBg.height / 2,
+            'END TURN',
+            {
+                fontSize: '16px',
+                fontFamily: 'Courier New',
+                color: '#ffffff',
+                stroke: '#000000',
+                strokeThickness: 2
+            }
+        ).setOrigin(0.5);
+
+        // Make button interactive
+        this.endTurnZone = this.add.zone(
+            this.endTurnButtonBg.x + this.endTurnButtonBg.width / 2,
+            this.endTurnButtonBg.y + this.endTurnButtonBg.height / 2,
+            this.endTurnButtonBg.width,
+            this.endTurnButtonBg.height
+        ).setInteractive();
+
+        this.endTurnZone.on('pointerover', () => {
+            if (this.currentPhase === 'player' && !this.isMoving) {
+                this.drawEndTurnButton(true);
+            }
+        });
+
+        this.endTurnZone.on('pointerout', () => {
+            this.drawEndTurnButton(false);
+        });
+
+        this.endTurnZone.on('pointerdown', () => {
+            if (this.currentPhase === 'player' && !this.isMoving && !this.battleOver) {
+                this.endPlayerTurn();
+            }
+        });
+    }
+
+    drawEndTurnButton(hovered) {
+        this.endTurnButton.clear();
+        const { x, y, width, height } = this.endTurnButtonBg;
+
+        // Background
+        const bgColor = hovered ? 0x6a6a9a : 0x4a4a7a;
+        this.endTurnButton.fillStyle(bgColor, 1);
+        this.endTurnButton.fillRoundedRect(x, y, width, height, 8);
+
+        // Border
+        this.endTurnButton.lineStyle(2, 0x8a8aba, 1);
+        this.endTurnButton.strokeRoundedRect(x, y, width, height, 8);
+    }
+
+    showPhaseBanner(text, color, callback) {
+        const { width, height } = this.cameras.main;
+
+        // Create banner background
+        const banner = this.add.graphics();
+        banner.fillStyle(0x000000, 0.7);
+        banner.fillRect(0, height / 2 - 40, width, 80);
+
+        // Create banner text
+        const bannerText = this.add.text(width / 2, height / 2, text, {
+            fontSize: '32px',
+            fontFamily: 'Courier New',
+            color: color,
+            stroke: '#000000',
+            strokeThickness: 4
+        }).setOrigin(0.5);
+
+        // Animate in
+        banner.alpha = 0;
+        bannerText.alpha = 0;
+
+        this.tweens.add({
+            targets: [banner, bannerText],
+            alpha: 1,
+            duration: 200,
+            onComplete: () => {
+                // Hold for a moment then fade out
+                this.time.delayedCall(800, () => {
+                    this.tweens.add({
+                        targets: [banner, bannerText],
+                        alpha: 0,
+                        duration: 200,
+                        onComplete: () => {
+                            banner.destroy();
+                            bannerText.destroy();
+                            if (callback) callback();
+                        }
+                    });
+                });
+            }
+        });
+    }
+
+    startPlayerPhase() {
+        this.currentPhase = 'player';
+        this.actionPoints = this.maxActionPoints;
+        this.updateAPDisplay();
+
+        this.showPhaseBanner('PLAYER PHASE', '#44aaff');
+
+        // Update button visibility
+        if (this.endTurnText) {
+            this.endTurnText.setAlpha(1);
+            this.drawEndTurnButton(false);
+        }
+    }
+
+    endPlayerTurn() {
+        if (this.currentPhase !== 'player' || this.isMoving) return;
+
+        // Clear any hover state
+        this.hoveredHex = null;
+        this.currentPath = null;
+        this.drawHexGrid();
+
+        // Dim the end turn button
+        if (this.endTurnText) {
+            this.endTurnText.setAlpha(0.5);
+        }
+
+        // Start enemy phase
+        this.startEnemyPhase();
+    }
+
+    async startEnemyPhase() {
+        this.currentPhase = 'enemy';
+        this.isProcessingTurn = true;
+
+        this.showPhaseBanner('ENEMY PHASE', '#ff4444', async () => {
+            // Process each enemy turn sequentially
+            for (const enemy of this.enemies) {
+                if (!enemy.isAlive || this.battleOver) continue;
+
+                enemy.resetTurn();
+                await enemy.executeTurn();
+
+                // Small delay between enemies
+                await this.delay(300);
+            }
+
+            this.isProcessingTurn = false;
+
+            // Check win condition
+            if (!this.battleOver) {
+                this.checkWinCondition();
+            }
+
+            // Start player phase if battle not over
+            if (!this.battleOver) {
+                this.startPlayerPhase();
+            }
+        });
+    }
+
+    delay(ms) {
+        return new Promise(resolve => this.time.delayedCall(ms, resolve));
+    }
+
+    checkWinCondition() {
+        const allEnemiesDead = this.enemies.every(e => !e.isAlive);
+        if (allEnemiesDead) {
+            this.endBattle(true);
+        }
+    }
+
+    endBattle(victory) {
+        if (this.battleOver) return;
+
+        this.battleOver = true;
+        this.currentPhase = 'none';
+
+        const { width, height } = this.cameras.main;
+
+        // Darken screen
+        const overlay = this.add.graphics();
+        overlay.fillStyle(0x000000, 0.8);
+        overlay.fillRect(0, 0, width, height);
+        overlay.alpha = 0;
+
+        // Result panel
+        const panelWidth = 300;
+        const panelHeight = 200;
+        const panelX = width / 2 - panelWidth / 2;
+        const panelY = height / 2 - panelHeight / 2;
+
+        const panel = this.add.graphics();
+        panel.fillStyle(victory ? 0x224422 : 0x442222, 1);
+        panel.fillRoundedRect(panelX, panelY, panelWidth, panelHeight, 16);
+        panel.lineStyle(4, victory ? 0x44aa44 : 0xaa4444, 1);
+        panel.strokeRoundedRect(panelX, panelY, panelWidth, panelHeight, 16);
+        panel.alpha = 0;
+
+        // Result text
+        const resultText = this.add.text(
+            width / 2,
+            panelY + 50,
+            victory ? 'VICTORY!' : 'DEFEAT',
+            {
+                fontSize: '36px',
+                fontFamily: 'Courier New',
+                color: victory ? '#44ff44' : '#ff4444',
+                stroke: '#000000',
+                strokeThickness: 4
+            }
+        ).setOrigin(0.5);
+        resultText.alpha = 0;
+
+        // Subtitle
+        const subtitle = this.add.text(
+            width / 2,
+            panelY + 90,
+            victory ? 'All enemies defeated!' : 'Your robot was destroyed...',
+            {
+                fontSize: '16px',
+                fontFamily: 'Courier New',
+                color: '#cccccc'
+            }
+        ).setOrigin(0.5);
+        subtitle.alpha = 0;
+
+        // Play Again button
+        const buttonWidth = 150;
+        const buttonHeight = 40;
+        const buttonX = width / 2 - buttonWidth / 2;
+        const buttonY = panelY + panelHeight - 60;
+
+        const button = this.add.graphics();
+        button.fillStyle(0x4a4a7a, 1);
+        button.fillRoundedRect(buttonX, buttonY, buttonWidth, buttonHeight, 8);
+        button.lineStyle(2, 0x8a8aba, 1);
+        button.strokeRoundedRect(buttonX, buttonY, buttonWidth, buttonHeight, 8);
+        button.alpha = 0;
+
+        const buttonText = this.add.text(
+            width / 2,
+            buttonY + buttonHeight / 2,
+            'PLAY AGAIN',
+            {
+                fontSize: '18px',
+                fontFamily: 'Courier New',
+                color: '#ffffff',
+                stroke: '#000000',
+                strokeThickness: 2
+            }
+        ).setOrigin(0.5);
+        buttonText.alpha = 0;
+
+        // Button interaction zone
+        const buttonZone = this.add.zone(
+            width / 2,
+            buttonY + buttonHeight / 2,
+            buttonWidth,
+            buttonHeight
+        ).setInteractive();
+        buttonZone.alpha = 0;
+
+        buttonZone.on('pointerover', () => {
+            button.clear();
+            button.fillStyle(0x6a6a9a, 1);
+            button.fillRoundedRect(buttonX, buttonY, buttonWidth, buttonHeight, 8);
+            button.lineStyle(2, 0xaaaacc, 1);
+            button.strokeRoundedRect(buttonX, buttonY, buttonWidth, buttonHeight, 8);
+        });
+
+        buttonZone.on('pointerout', () => {
+            button.clear();
+            button.fillStyle(0x4a4a7a, 1);
+            button.fillRoundedRect(buttonX, buttonY, buttonWidth, buttonHeight, 8);
+            button.lineStyle(2, 0x8a8aba, 1);
+            button.strokeRoundedRect(buttonX, buttonY, buttonWidth, buttonHeight, 8);
+        });
+
+        buttonZone.on('pointerdown', () => {
+            // Restart the scene
+            this.scene.restart();
+        });
+
+        // Animate in
+        this.tweens.add({
+            targets: [overlay, panel, resultText, subtitle, button, buttonText],
+            alpha: 1,
+            duration: 500,
+            ease: 'Power2'
         });
     }
 
@@ -265,8 +845,8 @@ class BattleScene extends Phaser.Scene {
     }
 
     onPointerMove(pointer) {
-        // Don't update hover during movement
-        if (this.isMoving) return;
+        // Don't update hover during movement or enemy phase
+        if (this.isMoving || this.currentPhase !== 'player' || this.battleOver) return;
 
         const hex = this.hexGrid.pixelToHex(pointer.x, pointer.y);
 
@@ -282,12 +862,27 @@ class BattleScene extends Phaser.Scene {
                 return;
             }
 
+            // Check if there's an enemy on this hex
+            const enemyOnHex = this.enemies?.find(e =>
+                e.isAlive && e.pos.q === hex.q && e.pos.r === hex.r
+            );
+            if (enemyOnHex) {
+                // Set hovered for attack highlighting, but no path
+                if (!this.hoveredHex || this.hoveredHex.q !== hex.q || this.hoveredHex.r !== hex.r) {
+                    this.hoveredHex = hex;
+                    this.currentPath = null;
+                    this.drawHexGrid();
+                }
+                return;
+            }
+
             if (!this.hoveredHex || this.hoveredHex.q !== hex.q || this.hoveredHex.r !== hex.r) {
                 this.hoveredHex = hex;
 
                 // Calculate path using A*
                 // Treat walls as obstacles always
                 // Treat traps as obstacles UNLESS the trap is the destination
+                // Treat enemies as obstacles always
                 const obstacles = this.obstacles?.filter(o => {
                     if (o.type === 'wall') return true;
                     if (o.type === 'trap') {
@@ -296,6 +891,13 @@ class BattleScene extends Phaser.Scene {
                     }
                     return false;
                 }) || [];
+
+                // Add enemies as obstacles
+                for (const enemy of this.enemies || []) {
+                    if (enemy.isAlive) {
+                        obstacles.push({ q: enemy.pos.q, r: enemy.pos.r, type: 'enemy' });
+                    }
+                }
 
                 this.currentPath = this.hexGrid.findPath(
                     this.playerPos.q, this.playerPos.r,
@@ -315,8 +917,8 @@ class BattleScene extends Phaser.Scene {
     }
 
     onPointerDown(pointer) {
-        // Don't allow clicks during movement
-        if (this.isMoving) return;
+        // Don't allow clicks during movement, enemy phase, or after battle
+        if (this.isMoving || this.currentPhase !== 'player' || this.battleOver) return;
 
         const hex = this.hexGrid.pixelToHex(pointer.x, pointer.y);
 
@@ -326,12 +928,101 @@ class BattleScene extends Phaser.Scene {
         const obstacle = this.obstacles?.find(o => o.q === hex.q && o.r === hex.r);
         if (obstacle?.type === 'wall') return;
 
-        // Must have a valid path and enough AP
+        // Check if clicking on an enemy (for attack)
+        const enemyOnHex = this.enemies?.find(e =>
+            e.isAlive && e.pos.q === hex.q && e.pos.r === hex.r
+        );
+
+        if (enemyOnHex) {
+            // Try to attack
+            this.attackEnemy(enemyOnHex);
+            return;
+        }
+
+        // Must have a valid path and enough AP for movement
         if (!this.currentPath || this.currentPath.length === 0) return;
         if (this.actionPoints < this.currentPath.length) return;
 
         // Execute movement along the path
         this.moveAlongPath();
+    }
+
+    attackEnemy(enemy) {
+        // Check if adjacent (range 1 for melee)
+        const distance = this.hexGrid.getDistance(
+            this.playerPos.q, this.playerPos.r,
+            enemy.pos.q, enemy.pos.r
+        );
+
+        if (distance > 1) {
+            // Not adjacent - show feedback
+            this.showDamageText(
+                this.hexGrid.hexToPixel(enemy.pos.q, enemy.pos.r).x,
+                this.hexGrid.hexToPixel(enemy.pos.q, enemy.pos.r).y - 40,
+                'Too far!'
+            );
+            return;
+        }
+
+        // Check AP cost
+        if (this.actionPoints < this.playerAttackCost) {
+            this.showDamageText(
+                this.hexGrid.hexToPixel(enemy.pos.q, enemy.pos.r).x,
+                this.hexGrid.hexToPixel(enemy.pos.q, enemy.pos.r).y - 40,
+                'No AP!'
+            );
+            return;
+        }
+
+        // Execute attack
+        this.isMoving = true;
+        this.actionPoints -= this.playerAttackCost;
+        this.updateAPDisplay();
+
+        // Stop idle animation
+        this.tweens.killTweensOf(this.playerRobot);
+
+        const playerPixel = this.hexGrid.hexToPixel(this.playerPos.q, this.playerPos.r);
+        const enemyPixel = this.hexGrid.hexToPixel(enemy.pos.q, enemy.pos.r);
+
+        // Lunge toward enemy
+        const lungeX = playerPixel.x + (enemyPixel.x - playerPixel.x) * 0.3;
+        const lungeY = playerPixel.y + (enemyPixel.y - playerPixel.y) * 0.3;
+
+        this.tweens.add({
+            targets: this.playerRobot,
+            x: lungeX,
+            y: lungeY,
+            duration: 100,
+            yoyo: true,
+            ease: 'Power2',
+            onComplete: () => {
+                // Deal damage to enemy
+                enemy.takeDamage(this.playerDamage);
+
+                // Return to position
+                this.playerRobot.x = playerPixel.x;
+                this.playerRobot.y = playerPixel.y;
+
+                // Resume idle animation
+                this.tweens.add({
+                    targets: this.playerRobot,
+                    y: playerPixel.y - 3,
+                    duration: 1000,
+                    yoyo: true,
+                    repeat: -1,
+                    ease: 'Sine.easeInOut'
+                });
+
+                this.isMoving = false;
+
+                // Check win condition
+                this.checkWinCondition();
+
+                // Redraw grid
+                this.drawHexGrid();
+            }
+        });
     }
 
     moveAlongPath() {
@@ -394,8 +1085,8 @@ class BattleScene extends Phaser.Scene {
                 );
 
                 if (obstacle?.type === 'trap') {
-                    this.cameras.main.shake(100, 0.01);
-                    this.showDamageText(nextPos.x, nextPos.y - 30, '-1 HP');
+                    this.damagePlayer(1);
+                    this.showDamageText(nextPos.x, nextPos.y - 30, '-1');
                 }
 
                 // Move to next hex in path

@@ -247,4 +247,82 @@ class HexGrid {
         // No path found
         return null;
     }
+
+    /**
+     * Check line of sight between two hexes
+     * Uses hex line drawing algorithm to check for blocking obstacles
+     * @param {number} q1 - Start hex Q
+     * @param {number} r1 - Start hex R
+     * @param {number} q2 - End hex Q
+     * @param {number} r2 - End hex R
+     * @param {Array} blockers - Array of {q, r} positions that block LOS
+     * @returns {boolean} - True if there's clear line of sight
+     */
+    hasLineOfSight(q1, r1, q2, r2, blockers = []) {
+        // If same hex, always has LOS
+        if (q1 === q2 && r1 === r2) return true;
+
+        // Get all hexes along the line
+        const lineHexes = this.getHexLine(q1, r1, q2, r2);
+
+        // Check each hex (except start and end) for blockers
+        for (let i = 1; i < lineHexes.length - 1; i++) {
+            const hex = lineHexes[i];
+            const blocked = blockers.some(b => b.q === hex.q && b.r === hex.r);
+            if (blocked) return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Get all hexes along a line between two hexes
+     * Uses cube coordinate linear interpolation
+     */
+    getHexLine(q1, r1, q2, r2) {
+        const N = this.getDistance(q1, r1, q2, r2);
+        if (N === 0) return [{ q: q1, r: r1 }];
+
+        const results = [];
+
+        // Convert to cube coordinates
+        const s1 = -q1 - r1;
+        const s2 = -q2 - r2;
+
+        for (let i = 0; i <= N; i++) {
+            const t = i / N;
+            // Linear interpolation in cube coordinates
+            const q = q1 + (q2 - q1) * t;
+            const r = r1 + (r2 - r1) * t;
+            const s = s1 + (s2 - s1) * t;
+
+            // Round to nearest hex
+            const rounded = this.roundCube(q, r, s);
+            results.push(rounded);
+        }
+
+        return results;
+    }
+
+    /**
+     * Round fractional cube coordinates to nearest hex
+     */
+    roundCube(q, r, s) {
+        let rq = Math.round(q);
+        let rr = Math.round(r);
+        let rs = Math.round(s);
+
+        const qDiff = Math.abs(rq - q);
+        const rDiff = Math.abs(rr - r);
+        const sDiff = Math.abs(rs - s);
+
+        if (qDiff > rDiff && qDiff > sDiff) {
+            rq = -rr - rs;
+        } else if (rDiff > sDiff) {
+            rr = -rq - rs;
+        }
+        // else rs = -rq - rr (but we don't need s for axial)
+
+        return { q: rq, r: rr };
+    }
 }
