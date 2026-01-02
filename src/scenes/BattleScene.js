@@ -4,14 +4,19 @@
 class BattleScene extends Phaser.Scene {
     constructor() {
         super({ key: 'BattleScene' });
+    }
 
+    /**
+     * Called on every start/restart - resets all game state
+     */
+    init() {
         this.hexGrid = null;
         this.playerRobot = null;
         this.hexGraphics = null;
         this.hoveredHex = null;
         this.selectedHex = null;
-        this.currentPath = null; // Path from player to hovered hex
-        this.isMoving = false; // Prevent input during movement
+        this.currentPath = null;
+        this.isMoving = false;
 
         // Player robot position (axial coordinates)
         this.playerPos = { q: 0, r: 0 };
@@ -31,8 +36,11 @@ class BattleScene extends Phaser.Scene {
         // Enemies
         this.enemies = [];
 
+        // Obstacles
+        this.obstacles = [];
+
         // Turn management
-        this.currentPhase = 'player'; // 'player' or 'enemy'
+        this.currentPhase = 'player';
         this.isProcessingTurn = false;
         this.battleOver = false;
     }
@@ -61,19 +69,53 @@ class BattleScene extends Phaser.Scene {
         this.input.on('pointermove', this.onPointerMove, this);
         this.input.on('pointerdown', this.onPointerDown, this);
 
-        // Add some example obstacles
-        this.obstacles = [
-            { q: 2, r: -1, type: 'wall' },
-            { q: -2, r: 2, type: 'wall' },
-            { q: 1, r: 2, type: 'trap' },
-            { q: -1, r: -2, type: 'trap' }
-        ];
+        // Generate random obstacles
+        this.generateObstacles();
 
         // Spawn enemies
         this.spawnEnemies(3);
 
         // Redraw with obstacles and enemies
         this.drawHexGrid();
+    }
+
+    generateObstacles() {
+        // Random number of walls (2-4) and traps (2-4)
+        const numWalls = 2 + Math.floor(Math.random() * 3);  // 2-4 walls
+        const numTraps = 2 + Math.floor(Math.random() * 3);  // 2-4 traps
+
+        // Get valid positions for obstacles (not player start, not too close)
+        const validPositions = this.hexGrid.hexes.filter(hex => {
+            // Not player position
+            if (hex.q === 0 && hex.r === 0) return false;
+
+            // Not adjacent to player (keep some space)
+            const dist = this.hexGrid.getDistance(hex.q, hex.r, 0, 0);
+            if (dist < 2) return false;
+
+            return true;
+        });
+
+        // Shuffle valid positions
+        for (let i = validPositions.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [validPositions[i], validPositions[j]] = [validPositions[j], validPositions[i]];
+        }
+
+        // Place walls first
+        this.obstacles = [];
+        let posIndex = 0;
+
+        for (let i = 0; i < numWalls && posIndex < validPositions.length; i++) {
+            const pos = validPositions[posIndex++];
+            this.obstacles.push({ q: pos.q, r: pos.r, type: 'wall' });
+        }
+
+        // Place traps
+        for (let i = 0; i < numTraps && posIndex < validPositions.length; i++) {
+            const pos = validPositions[posIndex++];
+            this.obstacles.push({ q: pos.q, r: pos.r, type: 'trap' });
+        }
     }
 
     spawnEnemies(count) {

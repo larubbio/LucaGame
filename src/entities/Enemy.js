@@ -274,9 +274,34 @@ class Enemy {
 
     /**
      * Check if can attack player from current position
+     * For ranged enemies, also checks line of sight
      */
     canReachPlayerWithAttack() {
-        return this.getDistanceToPlayer() <= this.range;
+        const dist = this.getDistanceToPlayer();
+        if (dist > this.range) return false;
+
+        // Ranged enemies need line of sight
+        if (this.aiType === 'ranged') {
+            return this.hasLineOfSightToPlayer();
+        }
+
+        return true;
+    }
+
+    /**
+     * Check line of sight to player (walls block, traps don't)
+     */
+    hasLineOfSightToPlayer() {
+        // Get wall positions (only walls block LOS, not traps)
+        const walls = (this.scene.obstacles || [])
+            .filter(o => o.type === 'wall')
+            .map(o => ({ q: o.q, r: o.r }));
+
+        return this.scene.hexGrid.hasLineOfSight(
+            this.pos.q, this.pos.r,
+            this.scene.playerPos.q, this.scene.playerPos.r,
+            walls
+        );
     }
 
     /**
@@ -345,20 +370,23 @@ class Enemy {
      * Ideal pattern: move 1 hex in → attack → move back to preferred distance
      */
     async executeRangedTurn() {
-        // Phase 1: Get into attack position if too far
+        // Phase 1: Get into attack position if too far or no LOS
         let dist = this.getDistanceToPlayer();
+        let hasLOS = this.hasLineOfSightToPlayer();
 
-        // If too far to attack, move closer until in range
-        while (dist > this.range && this.ap >= 1 && this.isAlive && !this.scene.battleOver) {
+        // If too far to attack or no line of sight, move closer
+        while ((dist > this.range || !hasLOS) && this.ap >= 1 && this.isAlive && !this.scene.battleOver) {
             const moved = await this.moveTowardPlayer();
             if (!moved) break;
             dist = this.getDistanceToPlayer();
+            hasLOS = this.hasLineOfSightToPlayer();
         }
 
-        // Phase 2: Attack phase - attack up to maxAttacksPerTurn times
-        while (this.canAttack() && dist <= this.range && this.isAlive && !this.scene.battleOver) {
+        // Phase 2: Attack phase - attack if in range AND has line of sight
+        // Only attack once, don't prioritize multiple attacks
+        if (this.canAttack() && dist <= this.range && hasLOS && this.isAlive && !this.scene.battleOver) {
             await this.attackPlayer();
-            dist = this.getDistanceToPlayer(); // Recalc in case something changed
+            dist = this.getDistanceToPlayer();
         }
 
         // Phase 3: Retreat to preferred distance if too close

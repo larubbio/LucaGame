@@ -40,7 +40,7 @@ const ENEMY_TYPES = {
         hp: 6,
         damage: 2,
         range: 1,
-        ap: 4,
+        ap: 3,
         maxAttacksPerTurn: 2,
         aiType: 'melee',
         preferredDistance: 1,
@@ -63,7 +63,7 @@ const ENEMY_TYPES = {
         ap: 3,
         maxAttacksPerTurn: 2,
         aiType: 'ranged',
-        preferredDistance: 4,
+        preferredDistance: 3,
         colors: {
             body: 0x55aa55,      // Green body
             head: 0x77cc77,      // Lighter green head
@@ -82,7 +82,7 @@ const ENEMY_TYPES = {
         ap: 3,
         maxAttacksPerTurn: 2,
         aiType: 'ranged',
-        preferredDistance: 4,
+        preferredDistance: 3,
         colors: {
             body: 0x5555aa,      // Blue body
             head: 0x7777cc,      // Lighter blue head
