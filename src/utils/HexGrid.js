@@ -149,4 +149,102 @@ class HexGrid {
 
         return results;
     }
+
+    /**
+     * A* pathfinding between two hexes
+     * @param {number} startQ - Start hex Q coordinate
+     * @param {number} startR - Start hex R coordinate
+     * @param {number} endQ - End hex Q coordinate
+     * @param {number} endR - End hex R coordinate
+     * @param {Array} obstacles - Array of {q, r} positions to avoid
+     * @returns {Array|null} - Array of hex positions forming path, or null if no path
+     */
+    findPath(startQ, startR, endQ, endR, obstacles = []) {
+        // Helper to create a key for hex position
+        const hexKey = (q, r) => `${q},${r}`;
+
+        // Check if a hex is blocked
+        const isBlocked = (q, r) => {
+            return obstacles.some(obs => obs.q === q && obs.r === r);
+        };
+
+        // Priority queue implemented as sorted array (simple but works)
+        const openSet = [];
+        const closedSet = new Set();
+
+        // Track came-from for path reconstruction
+        const cameFrom = new Map();
+
+        // G scores (cost from start)
+        const gScore = new Map();
+        gScore.set(hexKey(startQ, startR), 0);
+
+        // F scores (g + heuristic)
+        const fScore = new Map();
+        const startH = this.getDistance(startQ, startR, endQ, endR);
+        fScore.set(hexKey(startQ, startR), startH);
+
+        // Add start to open set
+        openSet.push({ q: startQ, r: startR, f: startH });
+
+        while (openSet.length > 0) {
+            // Sort by f score and get lowest
+            openSet.sort((a, b) => a.f - b.f);
+            const current = openSet.shift();
+            const currentKey = hexKey(current.q, current.r);
+
+            // Found the goal!
+            if (current.q === endQ && current.r === endR) {
+                // Reconstruct path
+                const path = [];
+                let curr = { q: endQ, r: endR };
+
+                while (curr) {
+                    path.unshift(curr);
+                    curr = cameFrom.get(hexKey(curr.q, curr.r));
+                }
+
+                // Remove start position from path (we're already there)
+                path.shift();
+                return path;
+            }
+
+            closedSet.add(currentKey);
+
+            // Check all neighbors
+            const neighbors = this.getNeighbors(current.q, current.r);
+
+            for (const neighbor of neighbors) {
+                const neighborKey = hexKey(neighbor.q, neighbor.r);
+
+                // Skip if already evaluated or blocked
+                if (closedSet.has(neighborKey)) continue;
+                if (isBlocked(neighbor.q, neighbor.r)) continue;
+
+                // Calculate tentative g score
+                const tentativeG = (gScore.get(currentKey) || Infinity) + 1;
+
+                // Check if this path is better
+                const existingG = gScore.get(neighborKey);
+                if (existingG === undefined || tentativeG < existingG) {
+                    // This is a better path
+                    cameFrom.set(neighborKey, { q: current.q, r: current.r });
+                    gScore.set(neighborKey, tentativeG);
+
+                    const h = this.getDistance(neighbor.q, neighbor.r, endQ, endR);
+                    const f = tentativeG + h;
+                    fScore.set(neighborKey, f);
+
+                    // Add to open set if not already there
+                    const inOpen = openSet.some(n => n.q === neighbor.q && n.r === neighbor.r);
+                    if (!inOpen) {
+                        openSet.push({ q: neighbor.q, r: neighbor.r, f: f });
+                    }
+                }
+            }
+        }
+
+        // No path found
+        return null;
+    }
 }

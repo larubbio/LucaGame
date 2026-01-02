@@ -10,6 +10,8 @@ class BattleScene extends Phaser.Scene {
         this.hexGraphics = null;
         this.hoveredHex = null;
         this.selectedHex = null;
+        this.currentPath = null; // Path from player to hovered hex
+        this.isMoving = false; // Prevent input during movement
 
         // Player robot position (axial coordinates)
         this.playerPos = { q: 0, r: 0 };
@@ -127,10 +129,26 @@ class BattleScene extends Phaser.Scene {
                 }
             }
 
-            // Highlight hovered hex
-            if (this.hoveredHex && this.hoveredHex.q === hex.q && this.hoveredHex.r === hex.r) {
-                fillColor = 0x4a6a8a;
-                fillAlpha = 0.8;
+            // Check if hex is in the current path
+            const isInPath = this.currentPath?.some(p => p.q === hex.q && p.r === hex.r);
+            const pathIndex = this.currentPath?.findIndex(p => p.q === hex.q && p.r === hex.r);
+
+            // Highlight path hexes
+            if (isInPath && !obstacle) {
+                // Destination hex (last in path) gets brighter highlight
+                if (pathIndex === this.currentPath.length - 1) {
+                    fillColor = 0x4a8a6a; // Green tint for destination
+                    fillAlpha = 0.9;
+                } else {
+                    fillColor = 0x3a5a7a; // Subtle blue for path
+                    fillAlpha = 0.7;
+                }
+            }
+
+            // Highlight hovered hex (destination) - even brighter
+            if (this.hoveredHex && this.hoveredHex.q === hex.q && this.hoveredHex.r === hex.r && !obstacle) {
+                fillColor = 0x5a9a7a;
+                fillAlpha = 0.9;
             }
 
             // Draw filled hex
@@ -201,7 +219,7 @@ class BattleScene extends Phaser.Scene {
         this.updateAPDisplay();
 
         // Instructions
-        this.add.text(20, height - 40, 'Click a hex to move (costs 1 AP) | SPACE to reset AP', {
+        this.add.text(20, height - 40, 'Hover to show path | Click to move (1 AP per hex) | SPACE to reset AP', {
             fontSize: '14px',
             fontFamily: 'Courier New',
             color: '#aaaaaa'
@@ -229,79 +247,141 @@ class BattleScene extends Phaser.Scene {
     }
 
     onPointerMove(pointer) {
+        // Don't update hover during movement
+        if (this.isMoving) return;
+
         const hex = this.hexGrid.pixelToHex(pointer.x, pointer.y);
 
         if (this.hexGrid.isValidHex(hex.q, hex.r)) {
+            // Check if it's a wall - don't highlight walls
+            const obstacle = this.obstacles?.find(o => o.q === hex.q && o.r === hex.r);
+            if (obstacle?.type === 'wall') {
+                if (this.hoveredHex) {
+                    this.hoveredHex = null;
+                    this.currentPath = null;
+                    this.drawHexGrid();
+                }
+                return;
+            }
+
             if (!this.hoveredHex || this.hoveredHex.q !== hex.q || this.hoveredHex.r !== hex.r) {
                 this.hoveredHex = hex;
+
+                // Calculate path using A*
+                // Treat walls as obstacles always
+                // Treat traps as obstacles UNLESS the trap is the destination
+                const obstacles = this.obstacles?.filter(o => {
+                    if (o.type === 'wall') return true;
+                    if (o.type === 'trap') {
+                        // Only treat as obstacle if NOT the destination
+                        return !(o.q === hex.q && o.r === hex.r);
+                    }
+                    return false;
+                }) || [];
+
+                this.currentPath = this.hexGrid.findPath(
+                    this.playerPos.q, this.playerPos.r,
+                    hex.q, hex.r,
+                    obstacles
+                );
+
                 this.drawHexGrid();
             }
         } else {
             if (this.hoveredHex) {
                 this.hoveredHex = null;
+                this.currentPath = null;
                 this.drawHexGrid();
             }
         }
     }
 
     onPointerDown(pointer) {
+        // Don't allow clicks during movement
+        if (this.isMoving) return;
+
         const hex = this.hexGrid.pixelToHex(pointer.x, pointer.y);
 
         if (!this.hexGrid.isValidHex(hex.q, hex.r)) return;
 
-        // Check if it's an obstacle
+        // Check if it's a wall
         const obstacle = this.obstacles?.find(o => o.q === hex.q && o.r === hex.r);
-        if (obstacle?.type === 'wall') return; // Can't move to walls
+        if (obstacle?.type === 'wall') return;
 
-        // Check if adjacent and have AP
-        const distance = this.hexGrid.getDistance(
-            this.playerPos.q, this.playerPos.r,
-            hex.q, hex.r
-        );
+        // Must have a valid path and enough AP
+        if (!this.currentPath || this.currentPath.length === 0) return;
+        if (this.actionPoints < this.currentPath.length) return;
 
-        if (distance === 1 && this.actionPoints > 0) {
-            this.movePlayerTo(hex.q, hex.r);
-        } else if (distance > 1 && this.actionPoints >= distance) {
-            // Allow moving multiple hexes if you have enough AP
-            this.movePlayerTo(hex.q, hex.r, distance);
-        }
+        // Execute movement along the path
+        this.moveAlongPath();
     }
 
-    movePlayerTo(q, r, cost = 1) {
-        // Check for trap
-        const obstacle = this.obstacles?.find(o => o.q === q && o.r === r);
+    moveAlongPath() {
+        if (!this.currentPath || this.currentPath.length === 0) return;
 
-        this.playerPos = { q, r };
-        this.actionPoints -= cost;
-        this.updateAPDisplay();
+        this.isMoving = true;
 
-        const newPos = this.hexGrid.hexToPixel(q, r);
+        // Store the path and clear the visual
+        const pathToFollow = [...this.currentPath];
+        this.currentPath = null;
+        this.hoveredHex = null;
 
-        // Stop current animation and move
+        // Stop idle animation
         this.tweens.killTweensOf(this.playerRobot);
 
+        // Move through each hex in sequence
+        this.moveToNextHex(pathToFollow, 0);
+    }
+
+    moveToNextHex(path, index) {
+        if (index >= path.length) {
+            // Movement complete
+            this.isMoving = false;
+
+            // Resume idle animation
+            const finalPos = this.hexGrid.hexToPixel(this.playerPos.q, this.playerPos.r);
+            this.tweens.add({
+                targets: this.playerRobot,
+                y: finalPos.y - 3,
+                duration: 1000,
+                yoyo: true,
+                repeat: -1,
+                ease: 'Sine.easeInOut'
+            });
+
+            this.drawHexGrid();
+            return;
+        }
+
+        const nextHex = path[index];
+        const nextPos = this.hexGrid.hexToPixel(nextHex.q, nextHex.r);
+
+        // Update player position and AP
+        this.playerPos = { q: nextHex.q, r: nextHex.r };
+        this.actionPoints -= 1;
+        this.updateAPDisplay();
+        this.drawHexGrid();
+
+        // Animate to next hex
         this.tweens.add({
             targets: this.playerRobot,
-            x: newPos.x,
-            y: newPos.y,
-            duration: 200 * cost,
+            x: nextPos.x,
+            y: nextPos.y,
+            duration: 150,
             ease: 'Power2',
             onComplete: () => {
-                // Resume idle animation
-                this.tweens.add({
-                    targets: this.playerRobot,
-                    y: newPos.y - 3,
-                    duration: 1000,
-                    yoyo: true,
-                    repeat: -1,
-                    ease: 'Sine.easeInOut'
-                });
+                // Check for trap at this hex
+                const obstacle = this.obstacles?.find(o =>
+                    o.q === nextHex.q && o.r === nextHex.r
+                );
 
-                // Trap damage effect
                 if (obstacle?.type === 'trap') {
                     this.cameras.main.shake(100, 0.01);
-                    this.showDamageText(newPos.x, newPos.y - 30, '-1 HP');
+                    this.showDamageText(nextPos.x, nextPos.y - 30, '-1 HP');
                 }
+
+                // Move to next hex in path
+                this.moveToNextHex(path, index + 1);
             }
         });
     }
