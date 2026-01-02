@@ -1,0 +1,11 @@
+{
+  "name": "cog-and-salvage",
+  "version": "0.1.0",
+  "description": "A steampunk robot battler roguelike",
+  "scripts": {
+    "start": "npx serve .",
+    "dev": "npx live-server --port=8080"
+  },
+  "keywords": ["game", "phaser", "roguelike", "steampunk"],
+  "license": "MIT"
+}
